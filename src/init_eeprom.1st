@@ -1,0 +1,122 @@
+
+#include <EEPROM.h>
+#include <Arduino.h>
+#include <WiFi.h>
+#include <nvs_flash.h>
+#include <SPIFFS.h>
+
+#define WIFI_TIMEOUT_SECS 30   // Wifi connection timeout in seconds
+#define NTP_TIMEOUT_SECS 10    // NTP server timeout in seconds
+#define WDT_TIMEOUT_SECS 10    // watchdog timer timeout in seconds
+#define TZ_OFFSET_SECS -18000  // Timezone offset in seconds (-5 hours)
+#define DST_OFFSET_SECS 3600   // daylight savings time offset in seconds
+#define uS_TO_S_FACTOR 1000000 // Conversion factor for micro seconds to seconds
+
+void eraseEEPROM();
+void writeStringToEEPROM(int addrOffset, const char *str);
+void writeIntToEEPROM(int addrOffset, int value);
+void show_time();
+tm get_time();
+
+void eraseEEPROM()
+{
+    EEPROM.begin(0); // initialize EEPROM with zero bytes
+    EEPROM.end();    // end the EEPROM session
+}
+
+void writeStringToEEPROM(int addrOffset, const char *str)
+{
+    int strLength = strlen(str) + 1; // Add 1 to include null terminator
+    for (int i = 0; i < strLength; i++)
+    {
+        EEPROM.write(addrOffset + i, str[i]);
+    }
+    EEPROM.commit(); // Commit changes to flash memory
+}
+
+void writeIntToEEPROM(int addrOffset, int value)
+{
+    EEPROM.put(addrOffset, value); // write the integer value to address 192
+    EEPROM.commit();               // save the changes to the EEPROM
+}
+
+// Show current datetime
+void show_time()
+{
+    struct tm time = get_time();
+    log_i("Current time: %02d-%02d-%04d %02d:%02d:%02d", time.tm_mon, time.tm_mday, time.tm_year, time.tm_hour, time.tm_min, time.tm_sec);
+}
+
+// Get current datetime from RTC
+tm get_time()
+{
+    struct tm time;
+    if (!getLocalTime(&time))
+    {
+        log_e("Could not obtain time info from RTC");
+        return time;
+    }
+    time.tm_year += 1900;
+    time.tm_mon += 1;
+    return time;
+}
+
+extern "C" void app_main()
+{
+    Serial.begin(115200);
+    // Initialize flash
+    nvs_flash_init();
+    delay(10000);
+    log_i("Erasing EEPROM...");
+    eraseEEPROM();
+    log_i("Initializing EEPROM...");
+    EEPROM.begin(512);
+    // Store Wi-Fi credentials
+    const char *ss = "Ssid";
+    const char *pa = "Password";
+    const char *ap = "http://192.168.1.1/sensor";
+    const char *nt = "191.168.1.1";
+    int iter = 1;
+    log_i("Writing to EEPROM...");
+    writeStringToEEPROM(0, ss);
+    writeStringToEEPROM(48, pa);
+    writeStringToEEPROM(96, ap);
+    writeStringToEEPROM(144, nt);
+    writeIntToEEPROM(192, iter);
+    EEPROM.commit();
+    EEPROM.end();
+    WiFi.begin(ss, pa);
+    log_i("Connecting to WiFi fot NTP...");
+    for (int i = 0; i < WIFI_TIMEOUT_SECS; i++)
+    {
+        if (WiFi.status() == WL_CONNECTED)
+        {
+            log_i("Connected to WiFi");
+            break;
+        }
+        delay(1000);
+    }
+    if (WiFi.status() != WL_CONNECTED)
+        log_e("Failed to connect to WiFi, Time not in sync!");
+    else
+    {
+        // Sync time with NTP server
+        log_i("Syncing time with NTP server");
+        configTime(TZ_OFFSET_SECS, DST_OFFSET_SECS, nt);
+        // Log the current time to console
+        show_time();
+    }
+        // Mount SPIFFS file system
+    if (!SPIFFS.begin(true))
+    {
+        log_e("An Error has occurred while mounting SPIFFS");
+        return;
+    }
+    else
+    {
+        log_i("SPIFFS mounted successfully");
+    }
+    log_i("Removing any existing data file from SPIFFS");
+    SPIFFS.remove("/data.txt");
+    log_i("Complete");
+}
