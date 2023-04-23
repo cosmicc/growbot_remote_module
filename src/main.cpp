@@ -15,9 +15,9 @@
 #include <SPIFFS.h>
 
 // compile definitions
-#undef RESET_DATA               // reset datafile on boot
-#define SLEEP_MIN 1              // Sleep time in minutes
-#define UPLOAD_EVERY 5           // Upload data every x sleep cycles
+#undef RESET_DATA                // reset datafile on boot
+#define SLEEP_MIN 15             // Sleep time in minutes
+#define UPLOAD_EVERY 4           // Upload data every x sleep cycles
 #define MOISTURE_WARN_PCT 20     // Warning moisture percentage
 #define BATTERY_WARN_VOLTAGE 3.6 // Warning battery voltage
 #define BATTERY_MIN_VOLTAGE 3.1  // Minimum battery voltage to operate
@@ -28,28 +28,28 @@
 #define SENSOR_DELAY_MS 10       // Delay between sensor reads in milliseconds
 #define WIFI_TIMEOUT_SECS 30     // Wifi connection timeout in seconds
 #define NTP_TIMEOUT_SECS 10      // NTP server timeout in seconds
-#define WDT_TIMEOUT_SECS 10      // watchdog timer timeout in seconds
+#define WDT_TIMEOUT_SECS 20      // watchdog timer timeout in seconds
 #define API_SEND_DELAY_MS 100    // Delay between API calls in milliseconds
 #define uS_TO_S_FACTOR 1000000   // Conversion factor for micro seconds to seconds
-#define BATTERY_PIN 39           // Analog input pin to read battery voltage  
+#define BATTERY_PIN 39           // Analog input pin to read battery voltage
 
-// Only GPIO 32-36 are ADC1 channels and can only be used for soil_sensors
+// Only GPIO 32-36 are ADC1 channels and are the only pins that can be used for soil_sensors
 // GPIO 39 is ADC1 also but is used for battery monitoring
-// ADC2 channels cannot be used because they are used by the wifi interference
-int sensor_pins[] = {36}; // list of each soil sensor pin this device will monitor
+// ADC2 channels cannot be used because they are used by wifi
+int sensor_pins[] = {36}; // list of each soil sensor gpio pin this device will monitor
 
 // Global variables
-int tz_offset_min = -300; // Timezone offset in seconds (-5 hours)
-int dst_offset_min = 60;  // daylight savings time offset in minutes
-int httpResponseCode;
-int sensor_length = sizeof(sensor_pins) / sizeof(sensor_pins[0]);
-bool spiff_ready = false;
-bool http_success_bit = true;
-bool system_problem = false;
-String problem_reason;
-char *api_url;
-char *ntp_server;
-int iter;
+int tz_offset_min = -300;                                         // Timezone offset in seconds (-5 hours)
+int dst_offset_min = 60;                                          // daylight savings time offset in minutes
+int httpResponseCode;                                             // variable to hold http response code
+int sensor_length = sizeof(sensor_pins) / sizeof(sensor_pins[0]); // number of sensors
+bool spiff_ready = false;                                         // SPIFFS ready flag
+bool http_success_bit = true;                                     // HTTP success flag
+bool system_problem = false;                                      // System problem flag
+String problem_reason;                                            // System problem reason
+char *api_url;                                                    // API URL
+char *ntp_server;                                                 // NTP server
+int iter;                                                         // loop iterator
 
 // function definitions
 void show_last_restart_reason();
@@ -69,6 +69,7 @@ void show_time();
 void show_battery_voltage();
 float get_battery_voltage();
 int get_battery_pct(float volt);
+String removeNewlines(const char *inputString);
 
 // display the reason for the last restart
 void show_last_restart_reason()
@@ -86,32 +87,32 @@ void show_last_restart_reason()
         break;
     case ESP_RST_EXT:
         log_w("Last reset reason: external reset");
-        problem_reason = "Last reset: external reset";
+        problem_reason = "external reset";
         system_problem = true;
         break;
     case ESP_RST_SW:
         log_w("Last reset reason: software reset");
-        problem_reason = "Last reset: software reset";
+        problem_reason = "software reset";
         system_problem = true;
         break;
     case ESP_RST_PANIC:
         log_e("Last reset reason: panic reset");
-        problem_reason = "Last reset: panic reset";
+        problem_reason = "panic reset";
         system_problem = true;
         break;
     case ESP_RST_INT_WDT:
         log_e("Last reset reason: interrupt watchdog reset");
-        problem_reason = "Last reset: interrupt watchdog reset";
+        problem_reason = "interrupt watchdog reset";
         system_problem = true;
         break;
     case ESP_RST_TASK_WDT:
         log_e("Last reset reason: task watchdog reset");
-        problem_reason = "Last reset: task watchdog reset";
+        problem_reason = "task watchdog reset";
         system_problem = true;
         break;
     case ESP_RST_WDT:
         log_e("Last reset reason: other watchdog reset");
-        problem_reason = "Last reset: other watchdog reset";
+        problem_reason = "other watchdog reset";
         system_problem = true;
         break;
     case ESP_RST_DEEPSLEEP:
@@ -119,12 +120,12 @@ void show_last_restart_reason()
         break;
     case ESP_RST_BROWNOUT:
         log_e("Last reset reason: brownout reset");
-        problem_reason = "Last reset: brownout reset";
+        problem_reason = "brownout reset";
         system_problem = true;
         break;
     case ESP_RST_SDIO:
         log_w("Last reset reason: SDIO reset");
-        problem_reason = "Last reset: SDIO reset";
+        problem_reason = "SDIO reset";
         system_problem = true;
         break;
     default:
@@ -168,15 +169,15 @@ char *readStringFromEEPROM(int addrOffset)
 void writeIntToEEPROM(int addrOffset, int value)
 {
     EEPROM.put(addrOffset, value); // write the integer value to address 192
-    EEPROM.commit();        // save the changes to the EEPROM
+    EEPROM.commit();               // save the changes to the EEPROM
 }
 
 // read integer from EEPROM
 int readIntFromEEPROM(int addrOffset)
 {
-    int value = 0;          // initialize variable to store the value read from EEPROM
+    int value = 0;                 // initialize variable to store the value read from EEPROM
     EEPROM.get(addrOffset, value); // read the integer value from address 192
-    return value;           // return the integer value
+    return value;                  // return the integer value
 }
 
 // Get the last 4 bytes of the MAC address
@@ -194,6 +195,25 @@ String getMacLast4()
     return macLast4;
 }
 
+String removeNewlines(String inputString)
+{
+    String outputString = "";
+    char *token;
+    char inputCopy[inputString.length() + 1]; // Make a copy of the input string
+    inputString.toCharArray(inputCopy, sizeof(inputCopy));
+    token = strtok(inputCopy, "\n"); // Get the first token
+    outputString = token;            // Set the output string to the first token
+    while (token != NULL)
+    {
+        token = strtok(NULL, "\n"); // Get the next token
+        if (token != NULL)
+        {
+            outputString += token; // Append the next token to the output string
+        }
+    }
+    return outputString;
+}
+
 // Send json sensor data to API
 void send_payload(String jsonPayload, bool writespiff)
 {
@@ -205,12 +225,12 @@ void send_payload(String jsonPayload, bool writespiff)
         httpClient.addHeader("Accept", "application/json");
         esp_task_wdt_reset();
         log_i("Sending Payload: %s", jsonPayload.c_str());
-        //httpResponseCode = httpClient.POST(encryptPayload(jsonPayload));
-        httpResponseCode = httpClient.POST(jsonPayload);
         esp_task_wdt_reset();
-        String response = httpClient.getString();
+        httpResponseCode = httpClient.POST(jsonPayload);
         log_i("HTTP Response Code: %s", String(httpResponseCode));
-        log_i("HTTP Response: %s", response.c_str());
+        String response = httpClient.getString();
+        String resp = removeNewlines(response);
+        log_i("HTTP Response: %s", resp.c_str());
         httpClient.end();
         if (httpResponseCode == 200)
         {
@@ -339,7 +359,7 @@ tm get_time()
         {
             WiFi.begin(ssid, password);
             log_i("Connecting to WiFi...");
-            for (int i = 0; i < WIFI_TIMEOUT_SECS*10; i++)
+            for (int i = 0; i < WIFI_TIMEOUT_SECS * 10; i++)
             {
                 if (WiFi.status() == WL_CONNECTED)
                 {
@@ -361,7 +381,9 @@ tm get_time()
         }
         // Sync time with NTP server
         log_i("Syncing time with NTP server");
-        configTime(tz_offset_min*60, dst_offset_min*60, ntp_server);
+        esp_task_wdt_reset();
+        configTime(tz_offset_min * 60, dst_offset_min * 60, ntp_server);
+        esp_task_wdt_reset();
         // Log the current time to console
         show_time();
         getLocalTime(&time);
@@ -397,12 +419,11 @@ void show_battery_voltage()
     {
         log_i("Battery voltage is normal [%0.1fv] (%d%%)", batteryVoltage, pct);
     }
-
 }
 
 float get_battery_voltage()
 {
-    int adcReading = analogRead(BATTERY_PIN);            // Read ADC value
+    int adcReading = analogRead(BATTERY_PIN);           // Read ADC value
     float batteryVoltage = (adcReading / 4095.0) * 3.3; // Convert ADC reading to voltage
     log_d("adcReading: [%d] Battery voltage: [%0.1fv]", adcReading, batteryVoltage);
     return batteryVoltage;
@@ -412,7 +433,7 @@ int get_battery_pct(float volt = 0.0)
 {
     float voltage;
     if (volt == 0.0)
-        voltage = get_battery_voltage();              // Read ADC value
+        voltage = get_battery_voltage(); // Read ADC value
     else
         voltage = volt;
     int pct = map(voltage, BATTERY_MIN_VOLTAGE, BATTERY_MAX_VOLTAGE, 0, 100);
@@ -444,21 +465,21 @@ extern "C" void app_main()
     log_d("Initializing SPIFFS partition...");
     // Mount SPIFFS file system
     if (!SPIFFS.begin(true))
-        {
+    {
         system_problem = true;
         problem_reason = "SPIFFS mount failed";
         log_e("An Error has occurred while mounting the SPIFFS partition");
-        }
+    }
     else
         spiff_ready = true;
-    #ifdef RESET_DATA
+#ifdef RESET_DATA
     SPIFFS.remove("/data.txt");
-    #endif
+#endif
     esp_task_wdt_reset();
     // Set ADC resolution to 12 bits (4096 levels)
     analogReadResolution(12);
     // Set ADC attenuation to 11dB for full range of 0-3.3V
-    analogSetAttenuation(ADC_11db); 
+    analogSetAttenuation(ADC_11db);
     // Get the last 4 digits of the mac address for the device id
     String device_id = getMacLast4().substring(getMacLast4().length() - 4);
     // Log the mac address to console
@@ -479,7 +500,7 @@ extern "C" void app_main()
         // Initialize wifi
         WiFi.begin(ssid, password);
         log_i("Connecting to [%s] WiFi...", String(ssid));
-        for (int i = 0; i < WIFI_TIMEOUT_SECS*10; i++)
+        for (int i = 0; i < WIFI_TIMEOUT_SECS * 10; i++)
         {
             if (WiFi.status() == WL_CONNECTED)
             {
@@ -495,7 +516,9 @@ extern "C" void app_main()
         {
             // Sync time with NTP server
             log_i("Syncing time with NTP server [%s]", ntp_server);
-            configTime(tz_offset_min*60, dst_offset_min*60, ntp_server);
+            esp_task_wdt_reset();
+            configTime(tz_offset_min * 60, dst_offset_min * 60, ntp_server);
+            esp_task_wdt_reset();
             // Log the current time to console
             show_time();
             // Check if the data file exists on the spiff partition and process archived sensor data
@@ -536,7 +559,7 @@ extern "C" void app_main()
             log_e("Sensor %d is not connected!", sensor_pins[i]);
             if (system_problem)
                 status_bit = "S";
-            else    
+            else
                 status_bit = "D";
             // Build the json payload
             String jsonPayload = "{\"device_id\":\"" + String(device_id) + "\",\"sensor_id\":" + String(sensor_pins[i]) + ",\"soil_value\":" + String(avg) + ",\"soil_pct\":0,\"status_bit\":\"" + String(status_bit) + "\",\"batt_volt\":\"" + String(batteryVoltage) + "\",\"batt_pct\":" + String(batt_pct) + ",\"timestamp\":\"" + timestamp.c_str() + "\",\"reason\":\"" + problem_reason + "\"}";
