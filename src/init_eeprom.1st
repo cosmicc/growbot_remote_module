@@ -12,6 +12,11 @@
 #define DST_OFFSET_SECS 3600   // daylight savings time offset in seconds
 #define uS_TO_S_FACTOR 1000000 // Conversion factor for micro seconds to seconds
 
+const char *ss = "Ssid";
+const char *pa = "Password";
+const char *ap = "http://192.168.1.1/sensor";
+const char *nt = "191.168.1.1";
+
 void eraseEEPROM();
 void writeStringToEEPROM(int addrOffset, const char *str);
 void writeIntToEEPROM(int addrOffset, int value);
@@ -72,10 +77,6 @@ extern "C" void app_main()
     log_i("Initializing EEPROM...");
     EEPROM.begin(512);
     // Store Wi-Fi credentials
-    const char *ss = "Ssid";
-    const char *pa = "Password";
-    const char *ap = "http://192.168.1.1/sensor";
-    const char *nt = "191.168.1.1";
     int iter = 1;
     log_i("Writing to EEPROM...");
     writeStringToEEPROM(0, ss);
