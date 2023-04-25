@@ -4,3 +4,5 @@
 .vscode/launch.json
 .vscode/ipch
 **/*.private
+sdkconfig.esp32dev
+dependencies.lock
