@@ -3,7 +3,7 @@
 // Created by: Ian Perry (ianperry99@gmail.com)
 // https://github.com/cosmicc/growbot_remote_module
 
-// ref:  2860 open air, 2230 dry, 1000 submerged in water,
+// soil moisture value ref:  2860 open air, 2400 dry, 1000 submerged in water,
 
 #include <EEPROM.h>
 #include <Arduino.h>
@@ -13,25 +13,25 @@
 #include <esp_sleep.h>
 #include <esp_task_wdt.h>
 #include <SPIFFS.h>
+#include <Mapf.h>
 
 // compile definitions
+#define VERSION 1                // firmware version
 #undef RESET_DATA                // reset datafile on boot
-#undef DEBUG_SERIAL             // enable serial debug
+#undef DEBUG_SERIAL              // enable serial debug
 #define CPU_FREQ_MHZ 80          // set CPU frequency in MHz Lower then 80 seems to fail wifi
-#define SLEEP_MIN 15             // Sleep time in minutes
-#define UPLOAD_EVERY 4           // Upload data every x sleep cycles
-#define MOISTURE_WARN_PCT 20     // Warning moisture percentage
-#define BATTERY_WARN_VOLTAGE 3.6 // Warning battery voltage
-#define BATTERY_MIN_VOLTAGE 3.1  // Minimum battery voltage to operate
-#define BATTERY_MAX_VOLTAGE 4.2  // Maximum battery voltage for percentage calulation
-#define SENSOR_SAMPLES 20        // Number of sensor samples to take for avg
-#define SENSOR_HI 2860           // Highest sensor reading
-#define SENSOR_LOW 1000          // Lowest sensor reading
+#define SLEEP_MIN 60             // Sleep time in minutes
+#define UPLOAD_EVERY 12          // Upload data every x sleep cycles
+#define MOISTURE_WARN_PCT 30     // Warning moisture percentage
+#define BATTERY_WARN_VOLTAGE 3.35// Warning battery voltage
+#define BATTERY_MIN_VOLTAGE 3.30 // Minimum battery voltage to operate
+#define BATTERY_MAX_VOLTAGE 4.20 // Maximum battery voltage for percentage calulation
+#define SENSOR_SAMPLES 5         // Number of sensor samples to take for avg
 #define SENSOR_DELAY_MS 10       // Delay between sensor reads in milliseconds
 #define WIFI_TIMEOUT_SECS 30     // Wifi connection timeout in seconds
 #define NTP_TIMEOUT_SECS 10      // set NTP server timeout in seconds
 #define WDT_TIMEOUT_SECS 20      // watchdog timer timeout in seconds
-#define API_SEND_DELAY_MS 100    // Delay between API calls in milliseconds
+#define API_SEND_DELAY_MS 10     // Delay between API calls in milliseconds
 #define uS_TO_S_FACTOR 1000000   // Conversion factor for micro seconds to seconds
 #define BATTERY_PIN 39           // Analog input pin to read battery voltage
 
@@ -247,62 +247,69 @@ void send_payload(String jsonPayload, bool writespiff)
 {
     if (WiFi.status() == WL_CONNECTED)
     {
+        api_url = readStringFromEEPROM(96);
+        #ifdef DEBUG_SERIAL
+        log_i("Using API URL: %s", api_url);
+        #endif
         HTTPClient httpClient;
         httpClient.begin(api_url); // Replace with your API endpoint
         httpClient.addHeader("Content-Type", "application/json");
         httpClient.addHeader("Accept", "application/json");
         esp_task_wdt_reset();
-#ifdef DEBUG_SERIAL
+        #ifdef DEBUG_SERIAL
         log_i("Sending Payload: %s", jsonPayload.c_str());
-#endif
+        #endif
         esp_task_wdt_reset();
         httpResponseCode = httpClient.POST(jsonPayload);
-#ifdef DEBUG_SERIAL
+        #ifdef DEBUG_SERIAL
         log_i("HTTP Response Code: %s", String(httpResponseCode));
-#endif
-        String response = httpClient.getString();
-        String resp = removeNewlines(response);
-#ifdef DEBUG_SERIAL
-        log_i("HTTP Response: %s", resp.c_str());
-#endif
-        httpClient.end();
+        #endif
+        if (httpResponseCode != 500)
+        {
+            String response = httpClient.getString();
+            String resp = removeNewlines(response);
+            #ifdef DEBUG_SERIAL
+            log_i("HTTP Response: %s", resp.c_str());
+            #endif
+        }
         if (httpResponseCode == 200)
         {
-#ifdef DEBUG_SERIAL
+            #ifdef DEBUG_SERIAL
             log_i("Sensor data sent to API successfully");
-#endif
+            #endif
             http_success_bit = true;
         }
         else
         {
-#ifdef DEBUG_SERIAL
+            #ifdef DEBUG_SERIAL
             log_e("Failed to send sensor data to API");
-#endif
+            #endif
             http_success_bit = false;
             if (writespiff)
             {
-#ifdef DEBUG_SERIAL
+                #ifdef DEBUG_SERIAL
                 log_w("Saving sensor data to SPIFFS because API is unreachable");
-#endif
+                #endif
                 write_spiff(jsonPayload);
             }
         }
+        //httpClient.end();
     }
     else
     {
         if (writespiff)
         {
-            if (iter == UPLOAD_EVERY)
-#ifdef DEBUG_SERIAL
+            if (iter != UPLOAD_EVERY)
+            #ifdef DEBUG_SERIAL
             {
-#endif
+            #endif
                 write_spiff(jsonPayload);
-#ifdef DEBUG_SERIAL
-                log_w("Saving sensor data to SPIFFS because wifi is down");
+            #ifdef DEBUG_SERIAL
+                log_w("Saving sensor data to SPIFFS");
             }
             else
                 log_i("Saving sensor data to SPIFFS because its not time to upload yet");
-#endif
+            #endif
         }
     }
 }
@@ -313,29 +320,27 @@ void check_datafile()
     // Check if the data file exists on the spiff partition
     if (!SPIFFS.exists("/data.txt"))
     {
-#ifdef DEBUG_SERIAL
+        #ifdef DEBUG_SERIAL
         log_i("No archived sensor data was found on SPIFFS");
-#endif
+        #endif
     }
     else
     {
         File data_file = SPIFFS.open("/data.txt", FILE_READ);
         if (!data_file)
         {
-#ifdef DEBUG_SERIAL
+            #ifdef DEBUG_SERIAL
             log_i("No archived sensor data was found on SPIFFS");
-#endif
+            #endif
         }
         else
         {
-#ifdef DEBUG_SERIAL
+            #ifdef DEBUG_SERIAL
             log_i("Processing archived sensor data entries found on SPIFFS");
-#endif
-            File data_file = SPIFFS.open("/data.txt", FILE_READ);
-            while (data_file.available() && http_success_bit)
+            #endif
+            for (String line = data_file.readStringUntil('\n'); line != ""; line = data_file.readStringUntil('\n'))
             {
                 esp_task_wdt_reset();
-                String line = data_file.readStringUntil('\n');
                 send_payload(line, false);
                 delay(API_SEND_DELAY_MS);
             }
@@ -343,9 +348,9 @@ void check_datafile()
             if (http_success_bit)
             {
                 // Delete the file
-#ifdef DEBUG_SERIAL
+                #ifdef DEBUG_SERIAL
                 log_i("Removing completed data file from SPIFFS");
-#endif
+                #endif
                 SPIFFS.remove("/data.txt");
             }
         }
@@ -360,15 +365,15 @@ void write_spiff(String data)
         File data_file = SPIFFS.open("/data.txt", FILE_APPEND);
         data_file.println(data);
         data_file.close();
-#ifdef DEBUG_SERIAL
+        #ifdef DEBUG_SERIAL
         log_i("Data saved to SPIFFS successfully");
-#endif
+        #endif
     }
     else
     {
-#ifdef DEBUG_SERIAL
+        #ifdef DEBUG_SERIAL
         log_e("SPIFFS not ready, cannot save data");
-#endif
+        #endif
     }
 }
 
@@ -377,17 +382,17 @@ int get_avg_moisture(int aout_pin)
 {
     if (aout_pin < 32 || aout_pin > 39)
     {
-#ifdef DEBUG_SERIAL
+        #ifdef DEBUG_SERIAL
         log_e("Invalid sensor pin [%d]", aout_pin);
-#endif
+#       endif
         return 0;
     }
     int total = 0;
     int avg = 0;
-#ifdef DEBUG_SERIAL
+    #ifdef DEBUG_SERIAL
     log_d("Reading sensor [GPIO%d] for [%d]x[%dms] samples...", aout_pin, SENSOR_SAMPLES, SENSOR_DELAY_MS);
     int start_time = millis();
-#endif
+    #endif
     for (int i = 0; i < SENSOR_SAMPLES; i++)
     {
         int value = analogRead(aout_pin); // read the analog value from sensor
@@ -396,10 +401,66 @@ int get_avg_moisture(int aout_pin)
         delay(SENSOR_DELAY_MS);
     }
     avg = total / SENSOR_SAMPLES;
-#ifdef DEBUG_SERIAL
+    #ifdef DEBUG_SERIAL
     log_d("Sensor [%d] read time for [%d]x[%dms] samples: [%dms]", aout_pin, SENSOR_SAMPLES, SENSOR_DELAY_MS, (millis() - start_time));
-#endif
+    #endif
     return avg;
+}
+
+bool is_wifi_connected()
+{
+    if (WiFi.status() == WL_CONNECTED)
+        return true;
+    else
+        return false;
+}
+
+void connect_wifi()
+{
+    if (WiFi.status() != WL_CONNECTED)
+    {
+        char *ssid = readStringFromEEPROM(0);
+        char *password = readStringFromEEPROM(48);
+        WiFi.begin(ssid, password);
+        #ifdef DEBUG_SERIAL
+        log_i("Connecting to WiFi...");
+        #endif
+        for (int i = 0; i < WIFI_TIMEOUT_SECS * 10; i++)
+        {
+            if (WiFi.status() == WL_CONNECTED)
+            {
+                #ifdef DEBUG_SERIAL
+                log_i("Connected to WiFi");
+                #endif
+                break;
+            }
+            esp_task_wdt_reset();
+            delay(100);
+        }
+        if (WiFi.status() != WL_CONNECTED)
+        {
+            #ifdef DEBUG_SERIAL
+            log_e("Failed to connect to WiFi");
+            #endif
+        }
+    }
+    // Sync time with NTP server
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        #ifdef DEBUG_SERIAL
+        log_i("Syncing time with NTP server");
+        #endif
+        esp_task_wdt_reset();
+        ntp_server = readStringFromEEPROM(144);
+        #ifdef DEBUG_SERIAL
+        log_i("Using NTP server: %s", ntp_server);
+        #endif
+        configTime(0, 0, ntp_server);
+    }
+    #ifdef DEBUG_SERIAL
+    else   
+        log_i("Cannot Sync NTP time, no wifi connection");
+    #endif
 }
 
 // Show current datetime
@@ -415,51 +476,13 @@ tm get_time()
     struct tm time;
     if (!getLocalTime(&time))
     {
-#ifdef DEBUG_SERIAL
+        #ifdef DEBUG_SERIAL
         log_e("Could not obtain time info from RTC, trying NTP sync");
-#endif
+        #endif
         // Initialize wifi
-        char *ssid = readStringFromEEPROM(0);
-        char *password = readStringFromEEPROM(48);
-        if (WiFi.status() != WL_CONNECTED)
-        {
-            WiFi.begin(ssid, password);
-#ifdef DEBUG_SERIAL
-            log_i("Connecting to WiFi...");
-#endif
-            for (int i = 0; i < WIFI_TIMEOUT_SECS * 10; i++)
-            {
-                if (WiFi.status() == WL_CONNECTED)
-                {
-#ifdef DEBUG_SERIAL
-                    log_i("Connected to WiFi");
-#endif
-                    break;
-                }
-                esp_task_wdt_reset();
-                delay(100);
-            }
-            if (WiFi.status() != WL_CONNECTED)
-            {
-#ifdef DEBUG_SERIAL
-                log_e("Failed to connect to WiFi");
-#endif
-                time.tm_year += 1900;
-                time.tm_mon += 1;
-                problem_reason = "Failed to get any time";
-                system_problem = true;
-                return time;
-            }
-        }
-        // Sync time with NTP server
-#ifdef DEBUG_SERIAL
-        log_i("Syncing time with NTP server");
-#endif
-        esp_task_wdt_reset();
-        configTime(tz_offset_min * 60, dst_offset_min * 60, ntp_server);
+        connect_wifi();
         esp_task_wdt_reset();
         // Log the current time to console
-        show_time();
         getLocalTime(&time);
         time.tm_year += 1900;
         time.tm_mon += 1;
@@ -476,43 +499,42 @@ void show_battery_voltage()
     int pct = get_battery_pct(batteryVoltage);
     if (batteryVoltage < BATTERY_MIN_VOLTAGE && batteryVoltage > 0.5)
     {
-        log_e("Battery voltage is critical! [%0.1fv] (%d%%) Sleeping indefinately", batteryVoltage, pct);
-        //esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
-        //esp_sleep_enable_ext0_wakeup(GPIO_NUM_13, HIGH);
-        //esp_deep_sleep_start();
+        log_e("Battery voltage is critical! [%0.2fv] (%d%%) Sleeping indefinately", batteryVoltage, pct);
+        esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+        esp_sleep_enable_ext0_wakeup(GPIO_NUM_13, HIGH);
+        esp_deep_sleep_start();
     }
     else if (batteryVoltage < 0.5)
     {
-        log_e("Battery is disconnected [%0.1fv] (%d%%)", batteryVoltage, pct);
+        log_e("Battery is disconnected [%0.2fv] (%d%%)", batteryVoltage, pct);
     }
     else if (batteryVoltage < BATTERY_WARN_VOLTAGE)
     {
-        log_w("Battery voltage is LOW! [%0.1fv] (%d%%)", batteryVoltage, pct);
+        log_w("Battery voltage is LOW! [%0.2fv] (%d%%)", batteryVoltage, pct);
     }
     else
     {
-        log_i("Battery voltage is normal [%0.1fv] (%d%%)", batteryVoltage, pct);
+        log_i("Battery voltage is normal [%0.2fv] (%d%%)", batteryVoltage, pct);
     }
 }
 
 float get_battery_voltage()
 {
-    int adcReading = analogRead(BATTERY_PIN);           // Read ADC value
-    float batteryVoltage = (adcReading / 4095.0) * 3.3; // Convert ADC reading to voltage
-#ifdef DEBUG_SERIAL
-    log_d("adcReading: [%d] Battery voltage: [%0.1fv]", adcReading, batteryVoltage);
-#endif
-    return batteryVoltage;
+    const float R1 = 100000.0f;
+    const float R2 = 220000.0f;
+    float sum = 0.0f;
+    for (int i = 0; i < 5; i++)
+    {
+        sum += analogRead(BATTERY_PIN);
+    }
+    float vs = sum / 5.0f;
+    float vin = vs * (3.3f / 4095.0f) * (R1 + R2) / R2;
+    return vin;
 }
 
-int get_battery_pct(float volt = 0.0)
+int get_battery_pct(float voltage)
 {
-    float voltage;
-    if (volt == 0.0)
-        voltage = get_battery_voltage(); // Read ADC value
-    else
-        voltage = volt;
-    int pct = map(voltage, BATTERY_MIN_VOLTAGE, BATTERY_MAX_VOLTAGE, 0, 100);
+    int pct = mapf(voltage, BATTERY_MIN_VOLTAGE, BATTERY_MAX_VOLTAGE, 0, 100);
     if (pct < 0)
         pct = 0;
     else if (pct > 100)
@@ -527,48 +549,47 @@ extern "C" void app_main()
     pinMode(22, OUTPUT);
     // Turn on internal status LED
     digitalWrite(22, LOW);
-#ifdef DEBUG_SERIAL
+    #ifdef DEBUG_SERIAL
     Serial.begin(115200);
-    //log_d("CPU Freq: %s", getCpuFrequencyMhz());
-    Serial.print("CPU Freq: ");
-    Serial.println(getCpuFrequencyMhz());
-#endif
+    // Show the last restart reason
+    show_last_restart_reason();
+    log_i("CPU Freq: %sMhz", String(getCpuFrequencyMhz()));
+    log_i("Initializing NVS Flash...");
+    #endif
     // Initialize flash
     nvs_flash_init();
     // Initialize the time struct
     struct tm time;
+    // Initialize the Hardware Watchdog
+    #ifdef DEBUG_SERIAL
+    log_i("Initializing Hardware Watchdog...");
+    #endif
     // Configure the deep sleep timer
     esp_sleep_enable_timer_wakeup((uint64_t)SLEEP_MIN * 60 * uS_TO_S_FACTOR);
-    // Show the last restart reason
-    show_last_restart_reason();
-    // Initialize the Hardware Watchdog
-#ifdef DEBUG_SERIAL
-    log_d("Initializing Hardware Watchdog...");
-#endif
     esp_task_wdt_init(WDT_TIMEOUT_SECS, true); // enable panic so ESP32 restarts
     esp_task_wdt_add(NULL);                    // add current thread to WDT watch
     // Initialize the EEPROM
-#ifdef DEBUG_SERIAL
-    log_d("Initializing EEPROM...");
-#endif
+    #ifdef DEBUG_SERIAL
+    log_i("Initializing EEPROM...");
+    #endif
     EEPROM.begin(512);
-#ifdef DEBUG_SERIAL
-    log_d("Initializing SPIFFS partition...");
-#endif
+    #ifdef DEBUG_SERIAL
+    log_i("Initializing SPIFFS partition...");
+    #endif
     // Mount SPIFFS file system
     if (!SPIFFS.begin(true))
     {
         system_problem = true;
         problem_reason = "SPIFFS mount failed";
-#ifdef DEBUG_SERIAL
+    #ifdef DEBUG_SERIAL
         log_e("An Error has occurred while mounting the SPIFFS partition");
-#endif
+    #endif
     }
     else
         spiff_ready = true;
-#ifdef RESET_DATA
+    #ifdef RESET_DATA
     SPIFFS.remove("/data.txt");
-#endif
+    #endif
     esp_task_wdt_reset();
     // Set ADC resolution to 12 bits (4096 levels)
     analogReadResolution(12);
@@ -577,102 +598,72 @@ extern "C" void app_main()
     // Get the last 4 digits of the mac address for the device id
     String device_id = getMacLast4().substring(getMacLast4().length() - 4);
     // Log the mac address to console
-#ifdef DEBUG_SERIAL
+    #ifdef DEBUG_SERIAL
+    log_i("Initialization Complete.");
     log_i("Device Address: %s", WiFi.macAddress().c_str());
-#endif
-    // Read saved data from EEPROM
-    char *ssid = readStringFromEEPROM(0);
-    char *password = readStringFromEEPROM(48);
-    api_url = readStringFromEEPROM(96);
-    ntp_server = readStringFromEEPROM(144);
+    show_time();
+    show_battery_voltage();
+    #endif
+    // Read iter from EEPROM 
     iter = readIntFromEEPROM(192);
-#ifdef DEBUG_SERIAL
-    log_i("Using NTP server: %s", ntp_server);
-    log_i("Using API URL: %s", api_url);
+    #ifdef DEBUG_SERIAL
     log_i("Sensor Iteration %d of %d before API upload", iter, UPLOAD_EVERY);
-#endif
-    if (iter >= UPLOAD_EVERY || !getLocalTime(&time) || !spiff_ready)
+    #endif
+    if (!getLocalTime(&time))
     {
-#ifdef DEBUG_SERIAL
+        #ifdef DEBUG_SERIAL
+        log_i("Time not set, setting time...");
+        #endif
+        time = get_time();
+    }
+    if (iter >= UPLOAD_EVERY || !spiff_ready)
+    {
+        #ifdef DEBUG_SERIAL
         log_i("API upload time!");
-#endif
+        #endif
         iter = 1;
         // Initialize wifi
-        WiFi.begin(ssid, password);
-#ifdef DEBUG_SERIAL
-        log_i("Connecting to [%s] WiFi...", String(ssid));
-#endif
-        for (int i = 0; i < WIFI_TIMEOUT_SECS * 10; i++)
-        {
-            if (WiFi.status() == WL_CONNECTED)
-            {
-#ifdef DEBUG_SERIAL
-                log_i("Connected to [%s] WiFi", String(ssid));
-#endif
-                break;
-            }
-            esp_task_wdt_reset();
-            delay(100);
-        }
-        if (WiFi.status() == WL_CONNECTED)
-        {
-            // Sync time with NTP server
-#ifdef DEBUG_SERIAL
-            log_i("Syncing time with NTP server [%s]", ntp_server);
-#endif
-            esp_task_wdt_reset();
-            configTime(tz_offset_min * 60, dst_offset_min * 60, ntp_server);
-            esp_task_wdt_reset();
-            // Check if the data file exists on the spiff partition and process archived sensor data
-            check_datafile();
-        }
-#ifdef DEBUG_SERIAL
-        else
-            log_e("Failed to connect to [%s] WiFi", String(ssid));
-#endif
+        connect_wifi();
+        check_datafile();
     }
     else
         iter++;
     writeIntToEEPROM(192, iter);
     EEPROM.commit(); // save the changes to the EEPROM
-    show_time();
-    show_battery_voltage();
     int avg;
-    int pct;
     // iterate through the sensors and get the average moisture value
-#ifdef DEBUG_SERIAL
+    #ifdef DEBUG_SERIAL
     log_i("Starting sensor read loop for %d sensors", sensor_length);
-#endif
+    #endif
     for (int i = 0; i < sensor_length; i++)
     {
         esp_task_wdt_reset();
         // Get the average moisture value from the sensor
         avg = get_avg_moisture(sensor_pins[i]);
-        // get the current time
-        struct tm time = get_time();
         // initialize memory for the timestamp
         char *ts = (char *)malloc(20);
         // Format the timestamp for the payload
+        time = get_time();
         sprintf(ts, "%04d-%02d-%02d %02d:%02d:%02d", time.tm_year, time.tm_mon, time.tm_mday, time.tm_hour, time.tm_min, time.tm_sec);
         String timestamp = String(ts);
         // prevent ts from memory leak
         free(ts);
         char batteryVoltage[10];
         float bv = get_battery_voltage();
-        sprintf(batteryVoltage, "%.1f", bv);
+        sprintf(batteryVoltage, "%.2f", bv);
         String status_bit = "0";
         int batt_pct = get_battery_pct(bv);
         if (avg == 0)
         {
-#ifdef DEBUG_SERIAL
+            #ifdef DEBUG_SERIAL
             log_e("Sensor %d is not connected!", sensor_pins[i]);
-#endif
+            #endif
             if (system_problem)
                 status_bit = "S";
             else
                 status_bit = "D";
             // Build the json payload
-            String jsonPayload = "{\"device_id\":\"" + String(device_id) + "\",\"sensor_id\":" + String(sensor_pins[i]) + ",\"soil_value\":" + String(avg) + ",\"status_bit\":\"" + String(status_bit) + "\",\"batt_volt\":\"" + String(batteryVoltage) + "\",\"batt_pct\":" + String(batt_pct) + ",\"timestamp\":\"" + timestamp.c_str() + "\",\"reason\":\"" + problem_reason + "\"}";
+            String jsonPayload = "{\"device_id\":\"" + String(device_id) + "\",\"sensor_id\":" + String(sensor_pins[i]) + ",\"soil_value\":" + String(avg) + ",\"status_bit\":\"" + String(status_bit) + "\",\"batt_volt\":\"" + String(batteryVoltage) + "\",\"batt_pct\":" + String(batt_pct) + ",\"timestamp\":\"" + timestamp.c_str() + "\",\"reason\":\"" + problem_reason + "\",\"version\":" + String(VERSION) + "}";
             // Send the payload to the API
             send_payload(jsonPayload, true);
             continue;
@@ -685,23 +676,23 @@ extern "C" void app_main()
                 status_bit = "B";
             else
                 status_bit = "A";
-#ifdef DEBUG_SERIAL
+            #ifdef DEBUG_SERIAL
             log_i("Sensor:%d  Moisture value:%d  Battery:%sv(%d%%)  Status:%s  Timestamp:%s", sensor_pins[i], avg, String(batteryVoltage), batt_pct, status_bit, timestamp.c_str());
-#endif
+            #endif
             // Build the json payload
-            String jsonPayload = "{\"device_id\":\"" + String(device_id) + "\",\"sensor_id\":" + String(sensor_pins[i]) + ",\"soil_value\":" + String(avg) + ",\"status_bit\":\"" + String(status_bit) + "\",\"batt_volt\":\"" + String(batteryVoltage) + "\",\"batt_pct\":" + batt_pct + ",\"timestamp\":\"" + timestamp.c_str() + "\",\"reason\":\"" + problem_reason + "\"}";
+            String jsonPayload = "{\"device_id\":\"" + String(device_id) + "\",\"sensor_id\":" + String(sensor_pins[i]) + ",\"soil_value\":" + String(avg) + ",\"status_bit\":\"" + String(status_bit) + "\",\"batt_volt\":\"" + String(batteryVoltage) + "\",\"batt_pct\":" + batt_pct + ",\"timestamp\":\"" + timestamp.c_str() + "\",\"reason\":\"" + problem_reason + "\",\"version\":" + String(VERSION) + "}";
             // Send the payload to the API
             send_payload(jsonPayload, true);
-            continue;
+        continue;
         }
     }
     // After all sensors are read, goto sleep until next reading
     EEPROM.end();
+    #ifdef DEBUG_SERIAL
     if (system_problem)
-#ifdef DEBUG_SERIAL
         log_w("System problem detected: %s", problem_reason);
     log_w("Tasks complete, going to sleep for %d minutes", SLEEP_MIN);
-#endif
+    #endif
     // Turn off the status LED
     digitalWrite(22, HIGH);
     esp_deep_sleep_start();

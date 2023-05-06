@@ -1,3 +1,18 @@
+// This is for brand new Esp32's to pre-populate wifi credentials & server info into the eeprom (Also if you need to change Wifi credentials).
+
+// This must be renamed to init_eeprom.cpp and compiled and uploaded first to populate the esp32 eeprom with your credentials.
+// After this is ran, it can be renamed back to init_eeprom.1st and just main.cpp only can be flashed moving forward (Unless you want to change Wifi credentials).
+
+// These are the only values that you need to change:
+// *********************************
+const char *ss = "MY_WIFI_SSID";                                 // Wifi name (SSID) this sensor will use
+const char *pa = "MY_WIFI_PASSWORD";                             // Wifi password this sensor will use
+const char *ap = "http://MY_GROWBOT_SERVER_IP/growbot-api";      // Growbot Server API URL
+const char *nt = "us.pool.ntp.org";                              // NTP Server to use (It's preferred to use a local NTP server if possible)
+#define TZ_OFFSET_SECS -18000                                    // Timezone offset in seconds (-5 hours)
+#define DST_OFFSET_SECS 3600                                     // daylight savings time offset in seconds (+1 hour)
+// *********************************
+// Do not change anything below this line
 
 #include <EEPROM.h>
 #include <Arduino.h>
@@ -8,14 +23,7 @@
 #define WIFI_TIMEOUT_SECS 30   // Wifi connection timeout in seconds
 #define NTP_TIMEOUT_SECS 10    // NTP server timeout in seconds
 #define WDT_TIMEOUT_SECS 10    // watchdog timer timeout in seconds
-#define TZ_OFFSET_SECS -18000  // Timezone offset in seconds (-5 hours)
-#define DST_OFFSET_SECS 3600   // daylight savings time offset in seconds
 #define uS_TO_S_FACTOR 1000000 // Conversion factor for micro seconds to seconds
-
-const char *ss = "Ssid";
-const char *pa = "Password";
-const char *ap = "http://192.168.1.1/sensor";
-const char *nt = "191.168.1.1";
 
 void eraseEEPROM();
 void writeStringToEEPROM(int addrOffset, const char *str);
@@ -107,7 +115,7 @@ extern "C" void app_main()
         // Log the current time to console
         show_time();
     }
-        // Mount SPIFFS file system
+    // Mount SPIFFS file system
     if (!SPIFFS.begin(true))
     {
         log_e("An Error has occurred while mounting SPIFFS");
