@@ -1,0 +1,173 @@
+/*
+Commands: u, h, d, l, r, +, -, w, q
+u: Increase ADC_OFFSET by 10
+h: Increase ADC_OFFSET by 20
+d: Decrease ADC_OFFSET by 10
+l: Decrease ADC_OFFSET by 20
+r: Reset ADC_OFFSET to 0
++: Set ADC_OFFSET to 100
+-: Set ADC_OFFSET to -100
+w: Write ADC_OFFSET to EEPROM
+q: Quit
+*/
+
+#include <EEPROM.h>
+#include <Arduino.h>
+#include <nvs_flash.h>
+
+#define CPU_FREQ_MHZ 80
+#define BATTERY_SAMPLES 50
+#define BATTERY_DELAY_MS 50
+#define DEBUG_SERIAL
+
+int ADC_OFFSET = 0;
+
+float get_battery_voltage()
+{
+    int total = 0;
+    for (int i = 0; i < BATTERY_SAMPLES; i++)
+    {
+        total += analogRead(39) + (ADC_OFFSET);
+        delay(BATTERY_DELAY_MS); // Wait between readings
+    }
+    float average = (float)total / (float)(BATTERY_SAMPLES);
+    // Calculate the voltage of the battery using the voltage divider equation
+    float r1 = 100000.0;
+    float r2 = 220000.0;
+    float vBattery = average * (3.3f / 4095.0f) * (r1 + r2) / r2;
+    Serial.print("Battery Voltage: ");
+    Serial.println(vBattery);
+    return vBattery;
+}
+
+void writeIntToEEPROM(int addrOffset, int value)
+{
+    EEPROM.put(addrOffset, value); // write the integer value to address 192
+    EEPROM.commit();               // save the changes to the EEPROM
+}
+
+int readIntFromEEPROM(int addrOffset)
+{
+    int value = 0;                 // initialize variable to store the value read from EEPROM
+    EEPROM.get(addrOffset, value); // read the integer value from address 192
+    return value;                  // return the integer value
+}
+
+bool isInteger(String str)
+{
+    if (str.length() == 0)
+    {
+        return false;
+    }
+
+    for (int i = 0; i < str.length(); i++)
+    {
+        if (i == 0 && (str.charAt(i) == '+' || str.charAt(i) == '-'))
+        {
+            continue; // skip the sign character
+        }
+        if (!isdigit(str.charAt(i)))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+extern "C" void app_main()
+{
+    setCpuFrequencyMhz(CPU_FREQ_MHZ);
+    Serial.begin(115200);
+    // Set internal statu LED pin
+    pinMode(22, OUTPUT);
+    // Turn on internal status LED
+    digitalWrite(22, LOW);
+    // Set ADC resolution to 12 bits (4096 levels)
+    analogReadResolution(12);
+    // Set ADC attenuation to 11dB for full range of 0-3.3V
+    analogSetAttenuation(ADC_11db);
+    nvs_flash_init();
+    delay(5000);
+    Serial.println("Initializing EEPROM...");
+    EEPROM.begin(512);
+    ADC_OFFSET = readIntFromEEPROM(256);
+    Serial.print("ADC EEPROM READ: ");
+    Serial.println(ADC_OFFSET);
+    if (isInteger(String(ADC_OFFSET)))
+    {
+        Serial.print("EXISTING ADC_OFFSET: ");
+        Serial.println(ADC_OFFSET);
+    }
+    else
+    {
+        Serial.println("ADC_OFFSET not found in EEPROM. Setting to 0.");
+        ADC_OFFSET = 0;
+    }
+    while (true)
+    {
+        if (Serial.available() > 0)
+        {
+            // Read the incoming byte
+            char incomingByte = Serial.read();
+
+            // Perform an action based on the incoming byte
+            if (incomingByte == 'u')
+            {
+                ADC_OFFSET = ADC_OFFSET + 10;
+            }
+            else if (incomingByte == 'y')
+            {
+                ADC_OFFSET = ADC_OFFSET + 1;
+            }
+            else if (incomingByte == 's')
+            {
+                ADC_OFFSET = ADC_OFFSET - 1;
+            }
+            else if (incomingByte == 'h')
+            {
+                ADC_OFFSET = ADC_OFFSET + 20;
+            }
+            else if (incomingByte == 'd')
+            {
+                ADC_OFFSET = ADC_OFFSET - 10;
+            }
+            else if (incomingByte == 'l')
+            {
+                ADC_OFFSET = ADC_OFFSET - 20;
+            }
+            else if (incomingByte == 'r')
+            {
+                ADC_OFFSET = 0;
+            }
+            else if (incomingByte == '+')
+            {
+                ADC_OFFSET = 100;
+            }
+            else if (incomingByte == '-')
+            {
+                ADC_OFFSET = -100;
+            }
+            else if (incomingByte == 'w')
+            {
+                Serial.print("Writing ADC_OFFSET ");
+                Serial.print(ADC_OFFSET);
+                Serial.println(" to EEPROM...");
+                writeIntToEEPROM(256, ADC_OFFSET);
+            }
+            else if (incomingByte == 'q')
+            {
+                Serial.println("Quitting...");
+                break;
+            }
+            else
+            {
+                Serial.println("Invalid input");
+            }
+        }
+        Serial.print("ADC Offset: ");
+        Serial.println(ADC_OFFSET);
+        get_battery_voltage();
+        Serial.println("------------------");
+    }
+    EEPROM.end();
+}
